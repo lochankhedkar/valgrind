@@ -812,6 +812,43 @@ static void ms_output_group (VgFile* fp, UInt depth, UInt indent,
    VG_(free)(groups);
 }
 
+static void ms_output_group_xml(UInt depth, UInt indent,
+                                Ms_Group* group, SizeT sig_sz,
+                                double sig_pct_threshold)
+{
+    UInt i;
+    Ms_Group* groups;
+    UInt n_groups;
+
+    // Start the XML element for this group
+    VG_(printf_xml)("%*s<group>\n", (Int)(indent + 1), "");
+
+    // If this is an insignificant group, handle it specially
+    if (group->ms_ec == NULL) {
+        const HChar* s = (1 == group->n_ec ? "," : "s, all");
+        vg_assert(group->group_ip == 0);
+        VG_(printf_xml)("<group>\n");
+	VG_(printf_xml)("<group_id>n0</group_id>\n");
+        VG_(printf_xml)("<size>%llu</size>\n", group->total);
+        VG_(printf_xml)("<description>%s</description>\n", s);
+        VG_(printf_xml)("</group>\n");
+        return;
+    }
+
+    // Normal group => output the group and its subgroups
+    ms_make_groups(depth + 1, group->ms_ec, group->n_ec, sig_sz, &n_groups, &groups);
+
+    // Output subgroups
+    for (i = 0; i < n_groups; i++) {
+        ms_output_group_xml(depth + 1, indent + 3, &groups[i], sig_sz, sig_pct_threshold);
+    }
+    // End the XML element for this group
+    VG_(printf_xml)("</group>\n");
+
+    VG_(free)(groups);
+}
+
+
 /* Allocate and build an array of Ms_Ec sorted by addresses in the
    Ms_Ec StackTrace. */
 static void prepare_ms_ec (XTree* xt,
@@ -985,6 +1022,75 @@ void VG_(XT_massif_print)
       VG_(free)(ms_ec);
    }
 }
+
+void VG_(XT_massif_print_xml)
+     (MsFile* fp,
+      XTree* xt,
+      const Massif_Header* header,
+      ULong (*report_value)(const void* value))
+{
+    UInt i;
+
+    if (fp == NULL)
+        return; // Normally VG_(XT_massif_open) already reported an error.
+
+    ULong top_total;
+
+    UInt n_ec = 0;
+    Ms_Ec* ms_ec = NULL;
+    const HChar* kind = header->detailed ? (header->peak ? "peak" : "detailed") : "empty";
+
+    if (header->detailed) {
+        prepare_ms_ec(xt, report_value, &top_total, &ms_ec, &n_ec);
+    } else if (xt == NULL) {
+        top_total = header->sz_B;
+    } else {
+        const XT_shared* shared = xt->shared;
+        const UInt n_xecu = VG_(sizeXA)(xt->data);
+        top_total = 0;
+
+        for (UInt xecu = 0; xecu < n_xecu; xecu++) {
+            xec* xe = (xec*)VG_(indexXA)(shared->xec, xecu);
+            if (xe->n_ips_sel == 0)
+                continue;
+            top_total += (*report_value)(VG_(indexXA)(xt->data, xecu));
+        }
+    }
+
+    // Begin XML snapshot
+    VG_(printf_xml)("<heap_tree>\n");
+    VG_(printf_xml)("<type>%s</type>\n", kind);
+
+    if (header->detailed) {
+        UInt n_groups;
+        Ms_Group* groups;
+
+        ULong sig_sz;
+        sig_sz = (0 == top_total && 0 != header->sig_threshold) ? 1 :
+                 ((top_total + header->extra_B + header->stacks_B) * header->sig_threshold) / 100;
+
+        ms_make_groups(0, ms_ec, n_ec, sig_sz, &n_groups, &groups);
+
+        VG_(printf_xml)("<top_node>\n");
+        VG_(printf_xml)("<desc>%s</desc>\n", header->top_node_desc);
+        VG_(printf_xml)("<total>%llu</total>\n", top_total);
+        VG_(printf_xml)("</top_node>\n");
+
+        VG_(printf_xml)("<groups>\n");
+        for (i = 0; i < n_groups; i++) {
+            VG_(printf_xml)("<group>\n");
+            ms_output_group_xml(0, 0, &groups[i], sig_sz, header->sig_threshold);
+            VG_(printf_xml)("</group>\n");
+        }
+        VG_(printf_xml)("</groups>\n");
+
+        VG_(free)(groups);
+        VG_(free)(ms_ec);
+    }
+
+    VG_(printf_xml)("</heap_tree>\n");
+}
+
 
 Int VG_(XT_offset_main_or_below_main)(DiEpoch ep, Addr* ips, Int n_ips)
 {

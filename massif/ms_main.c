@@ -147,7 +147,7 @@ Number of snapshots: 50
 #endif
 
 //---------------------------------------------------------------------------
-
+#include <stdio.h>
 #include "pub_tool_basics.h"
 #include "pub_tool_vki.h"
 #include "pub_tool_aspacemgr.h"
@@ -171,9 +171,7 @@ Number of snapshots: 50
 #include "pub_tool_xtmemory.h"
 #include "pub_tool_clientstate.h"
 #include "pub_tool_gdbserver.h"
-
 #include "pub_tool_clreq.h"           // For {MALLOC,FREE}LIKE_BLOCK
-
 //------------------------------------------------------------*/
 //--- Overview of operation                                ---*/
 //------------------------------------------------------------*/
@@ -357,6 +355,7 @@ static const HChar* TimeUnit_to_string(TimeUnit time_unit)
    }
 }
 
+
 static Bool   clo_heap            = True;
    // clo_heap_admin is deliberately a word-sized type.  At one point it was
    // a UInt, but this caused problems on 64-bit machines when it was
@@ -383,6 +382,7 @@ static Bool ms_process_cmd_line_option(const HChar* arg)
    VG_(addToXA)(args_for_massif, &arg);
 
         if VG_BOOL_CLO(arg, "--heap",           clo_heap)   {}
+
    else if VG_BINT_CLO(arg, "--heap-admin",     clo_heap_admin, 0, 1024) {}
 
    else if VG_BOOL_CLO(arg, "--stacks",         clo_stacks) {}
@@ -1820,7 +1820,7 @@ IRSB* ms_instrument ( VgCallbackClosure* closure,
 
 static void pp_snapshot(MsFile *fp, Snapshot* snapshot, Int snapshot_n)
 {
-   const Massif_Header header = (Massif_Header) {
+      const Massif_Header header = (Massif_Header) {
       .snapshot_n    = snapshot_n,
       .time          = snapshot->time,
       .sz_B          = snapshot->heap_szB,
@@ -1839,25 +1839,69 @@ static void pp_snapshot(MsFile *fp, Snapshot* snapshot, Int snapshot_n)
    VG_(XT_massif_print)(fp, snapshot->xt, &header, alloc_szB);
 }
 
+static void pp_snapshot_xml(Snapshot* snapshot, Int snapshot_n)
+{
+    VG_(printf_xml)("\n<snapshot>\n");
+    VG_(printf_xml)("<snapshot_n>%d</snapshot_n>\n", snapshot_n);
+    VG_(printf_xml)("<snapshot_time>%lld</snapshot_time>\n", snapshot->time);
+    VG_(printf_xml)("<mem_heap_szB>%lu</mem_heap_szB>\n", snapshot->heap_szB);
+    VG_(printf_xml)("<mem_heap_extra_szB>%lu</mem_heap_extra_szB>\n", snapshot->heap_extra_szB);
+    VG_(printf_xml)("<mem_stacks_szB>%lu</mem_stacks_szB>\n", snapshot->stacks_szB);
+    VG_(printf_xml)("<detailed>%d</detailed>\n", is_detailed_snapshot(snapshot));
+    VG_(printf_xml)("<peak>%d</peak>\n", Peak == snapshot->kind);
+    VG_(printf_xml)("<top_node_desc>%s</top_node_desc>\n", clo_pages_as_heap ?
+        "(page allocation syscalls) mmap/mremap/brk, --alloc-fns, etc."
+        : "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.");
+    VG_(printf_xml)("<sig_threshold>%f</sig_threshold>\n", clo_threshold);
+
+    Massif_Header header = {
+        .snapshot_n = snapshot_n,
+        .time = snapshot->time,
+        .sz_B = snapshot->heap_szB,
+        .extra_B = snapshot->heap_extra_szB,
+        .stacks_B = snapshot->stacks_szB,
+        .detailed = is_detailed_snapshot(snapshot),
+        .peak = Peak == snapshot->kind,
+        .top_node_desc = clo_pages_as_heap ?
+            "(page allocation syscalls) mmap/mremap/brk, --alloc-fns, etc." :
+            "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.",
+        .sig_threshold = clo_threshold
+    };
+
+    VG_(XT_massif_print_xml)(NULL, snapshot->xt, &header, alloc_szB);
+
+    VG_(printf_xml)("</snapshot>\n");
+    sanity_check_snapshot(snapshot);
+}
+
+
+
 static void write_snapshots_to_file(const HChar* massif_out_file, 
                                     Snapshot snapshots_array[], 
                                     Int nr_elements)
 {
    Int i;
    MsFile *fp;
+     if (VG_(clo_xml))
+     {
+	  for (i = 0; i < nr_elements; i++) {
+             Snapshot* snapshot = & snapshots_array[i];
+             pp_snapshot_xml(snapshot, i);     // Detailed snapshot!
+          }
+     }else {
+        fp = VG_(XT_massif_open)(massif_out_file,
+                                 NULL,
+                                 args_for_massif,
+                                 TimeUnit_to_string(clo_time_unit));
+        if (fp == NULL)
+           return; // Error reported by VG_(XT_massif_open)
 
-   fp = VG_(XT_massif_open)(massif_out_file,
-                            NULL,
-                            args_for_massif,
-                            TimeUnit_to_string(clo_time_unit));
-   if (fp == NULL)
-      return; // Error reported by VG_(XT_massif_open)
-
-   for (i = 0; i < nr_elements; i++) {
-      Snapshot* snapshot = & snapshots_array[i];
-      pp_snapshot(fp, snapshot, i);     // Detailed snapshot!
-   }
-   VG_(XT_massif_close) (fp);
+        for (i = 0; i < nr_elements; i++) {
+           Snapshot* snapshot = & snapshots_array[i];
+           pp_snapshot(fp, snapshot, i);     // Detailed snapshot!
+        }
+        VG_(XT_massif_close) (fp);
+     }
 }
 
 static void write_snapshots_array_to_file(void)
@@ -2158,6 +2202,8 @@ static void ms_pre_clo_init(void)
    // Needs.
    VG_(needs_libc_freeres)();
    VG_(needs_cxx_freeres)();
+
+   VG_(needs_xml_output)          ();
    VG_(needs_command_line_options)(ms_process_cmd_line_option,
                                    ms_print_usage,
                                    ms_print_debug_usage);

@@ -225,6 +225,30 @@ typedef
 
    } Massif_Header;
 
+typedef
+   struct {
+      int snapshot_n; // starting at 0.
+      Time time;
+
+      ULong sz_B;     // sum of values, only used when printing a NULL xt.
+      ULong extra_B;
+      ULong stacks_B;
+
+      Bool detailed;
+      Bool peak;
+
+      /*   top_node_desc: description for the top node.
+           Typically for memory usage, give xt_heap_alloc_functions_desc. */
+      const HChar* top_node_desc;
+
+      /* children with less than sig_threshold * total xt sz will be aggregated
+         and printed as one single child. */
+      double sig_threshold;
+
+   } xml_Header;
+
+
+
 /* Prints xt in outfilename in massif format.
    If a NULL xt is provided, then only the header information is used
    to produce the (necessarily not detailed) snapshot.
@@ -239,6 +263,11 @@ extern void VG_(XT_massif_print)
       const Massif_Header* header,
       ULong (*report_value)(const void* value));
 
+extern void VG_(XT_xml_print)
+     (VgFile* fp,
+      XTree* xt,
+      const xml_Header* header,
+      ULong (*report_value)(const void* value));
 #endif   // __PUB_TOOL_XTREE_H
 
 /*--------------------------------------------------------------------*/
